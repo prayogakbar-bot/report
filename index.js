@@ -4,44 +4,77 @@ import axios from "axios";
 
 const app = express();
 
-// RAW BODY untuk verifikasi signature Digiflazz
-app.use(express.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf.toString();
-  }
-}));
+/**
+ * RAW BODY (WAJIB UNTUK DIGIFLAZZ SIGNATURE)
+ */
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf.toString();
+    },
+  })
+);
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const SECRET = process.env.DIGIFLAZZ_SECRET;
 
-// Cek server hidup
+/**
+ * CEK SERVER
+ */
 app.get("/", (req, res) => {
   res.send("REPORT DIGIFLAZZ AKTIF ✅");
 });
 
-// ENDPOINT REPORT
+/**
+ * CALLBACK DIGIFLAZZ
+ */
 app.post("/report", async (req, res) => {
-  const signature = req.headers["x-hub-signature"];
-  const event = req.headers["x-digiflazz-event"];
+  try {
+    const signature = req.headers["x-hub-signature"];
+    const event = req.headers["x-digiflazz-event"];
 
-  // 🔐 Validasi signature
-  const hash = crypto
-    .createHmac("sha1", SECRET)
-    .update(req.rawBody)
-    .digest("hex");
+    // Debug (AMAN)
+    console.log("EVENT:", event);
+    console.log("SIGNATURE:", signature ? "ADA" : "KOSONG");
+    console.log("BODY:", req.body);
 
-  if (signature !== `sha1=${hash}`) {
-    return res.sendStatus(401);
-  }
+    if (!signature) {
+      console.warn("❌ Signature tidak ditemukan");
+      return res.sendStatus(401);
+    }
 
-  const data = req.body?.data;
-  if (!data) return res.sendStatus(200);
+    /**
+     * VALIDASI SIGNATURE
+     */
+    const hash = crypto
+      .createHmac("sha1", SECRET)
+      .update(req.rawBody)
+      .digest("hex");
 
-  // 🔔 HANYA PENDING
-  if (data.status?.toLowerCase() === "pending") {
+    if (signature !== `sha1=${hash}`) {
+      console.warn("❌ Signature tidak valid");
+      return res.sendStatus(401);
+    }
+
+    const data = req.body?.data;
+    if (!data) {
+      console.warn("❌ Data kosong");
+      return res.sendStatus(200);
+    }
+
+    /**
+     * FILTER STATUS
+     */
+    if (data.status?.toLowerCase() !== "pending") {
+      return res.sendStatus(200);
+    }
+
+    /**
+     * FORMAT PESAN TELEGRAM
+     */
     const message = `
-📊 REPORT TRANSAKSI PENDING
+📊 *REPORT TRANSAKSI PENDING*
 ━━━━━━━━━━━━━━
 🆔 Ref ID : ${data.ref_id}
 📦 Produk : ${data.buyer_sku_code}
@@ -51,19 +84,37 @@ app.post("/report", async (req, res) => {
 ━━━━━━━━━━━━━━
 `;
 
-    await axios.post(
-      `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
-      {
-        chat_id: CHAT_ID,
-        text: message
-      }
-    );
-  }
+    /**
+     * KIRIM KE TELEGRAM
+     */
+    try {
+      await axios.post(
+        `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
+        {
+          chat_id: CHAT_ID,
+          text: message,
+          parse_mode: "Markdown",
+        }
+      );
+      console.log("✅ Telegram terkirim");
+    } catch (tgErr) {
+      console.error(
+        "❌ Telegram error:",
+        tgErr.response?.data || tgErr.message
+      );
+    }
 
-  res.sendStatus(200);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("❌ ERROR CALLBACK:", err);
+    res.sendStatus(500);
+  }
 });
 
+/**
+ * START SERVER
+ */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log("REPORT berjalan di port", PORT)
-);
+app.listen(PORT, () => {
+  console.log("🚀 REPORT Digiflazz berjalan di port", PORT);
+});
